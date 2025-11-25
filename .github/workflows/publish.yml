@@ -1,0 +1,57 @@
+name: Deploy Auto-Appy-Dev-Labs-Team-B Backend Application
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the code from the repository
+      - name: Checkout Repository Code
+        uses: actions/checkout@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Set up PHP environment for the application
+      - name: Set Up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      # Install PHP dependencies using Composer
+      - name: Install PHP Dependencies with Composer
+        run: composer install --no-interaction --prefer-dist --no-progress --no-scripts --quiet
+
+      # Configure SSH for secure server access
+      - name: Configure SSH Access
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -t rsa -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      # Deploy application files to the server using rsync
+      - name: Deploy Application Files
+        run: |
+          rsync -avz --delete --exclude='.env' \
+                -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT }}" \
+                ./ ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:domains/purposebuddy.com/public_html/team-b
+
+      # Execute deployment commands on the server
+      - name: Execute Deployment Commands
+        run: |
+          ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} << 'EOF'
+            cd domains/purposebuddy.com/public_html/team-b
+            php artisan migrate --force
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+          EOF

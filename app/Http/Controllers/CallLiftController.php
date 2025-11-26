@@ -71,7 +71,7 @@ class CallLiftController extends Controller
                 : json_decode($lift->stops ?? "[]", true);
             return [
                 "liftId"     => $lift->id,
-                "floor"      => $lift->current_floor,
+                "floor"      => FloorHelper::getFloorId($lift->current_floor),
                 "direction"  => $lift->direction,
                 "queue"      => $queue // if stored as JSON
             ];

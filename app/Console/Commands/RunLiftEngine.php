@@ -55,7 +55,7 @@ class RunLiftEngine extends Command
         }
 
         $current = $lift->current_floor;
-        $next = $stops[0];
+        $next = $stops[0]["floor"];
 
         if ($current < $next) {
             sleep(config('constants.LIFT_TRAVELLING_TIME'));

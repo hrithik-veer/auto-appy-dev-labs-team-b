@@ -8,6 +8,7 @@ use App\Helpers\FloorHelper;
 use Illuminate\Support\Facades\Cache;
 
 use App\Services\LiftCaller;
+use App\Helpers\StopSorter;
 
 class LiftService
 {
@@ -35,6 +36,8 @@ class LiftService
         }
     }
 
+    // Calling Request Lift function inside LiftCaller
+    
     protected $LiftCaller;
 
     public function __construct(LiftCaller $liftCaller)
@@ -44,7 +47,7 @@ class LiftService
 
     public function requestLift(string $floor, string $direction)
     {
-        return $this->liftCaller->requestLift1($floor,$direction);
+        return $this->liftCaller->HandletLiftrequest($floor,$direction);
     }
 
 
@@ -57,11 +60,14 @@ class LiftService
             return response()->json(['error' => 'No destinations provided'], 400);
         }
 
+        // We are starting a DB Transaction where all queries inside must either 
+        // succeed together or fail together.
         return DB::transaction(function () use ($destinations, $liftId) {
 
-            // Lock lift
+            // Lock lifts
             $lift = Lift::where('id', $liftId)->lockForUpdate()->first();
 
+            // Check If lift exists 
             if (!$lift) {
                 return response()->json(['error' => 'Lift not found'], 404);
             }
@@ -95,7 +101,10 @@ class LiftService
 
                 // Add to stops if not already there
                 if (!in_array($destination, $stops)) {
-                    $stops[] = $destination;
+                    $stops[] = [
+                        "floor"=>$destination,
+                        "direction"=>null
+                    ];
                     $validDestinationsAdded = true;
                 }
             }
@@ -114,11 +123,11 @@ class LiftService
             }
 
             // Sort stops FIRST before determining direction
-            $stops = $this->sortStops($stops, $current, $lift->direction);
+            $stops = StopSorter::sortStops($stops, $current, $lift->direction);
+            foreach ($stops as $i => $s) {
+                $stops[$i]["direction"] = ($s["floor"] > $current) ? "UP" : "DOWN";
+            }
 
-            $stops = array_map(function($s) {
-                        return is_array($s) && isset($s['floor']) ? (int)$s['floor'] : (int)$s;
-                }, $stops);
             /** Set direction if idle - use FIRST SORTED stop */
             if (strtoupper(trim($lift->direction)) === 'IDLE' && !empty($stops)) {
                 $firstStop = $stops[0]; // Now this is correctly the first sorted stop
@@ -129,8 +138,8 @@ class LiftService
             $lift->save();
 
             /** Convert numeric stops back to string for UI */
-            
-            $formattedStops = array_map(fn($n) => FloorHelper::getFloorId($n), $stops);
+            $formattedStops = array_map(fn($n) => FloorHelper::getFloorId($n['floor']), $stops);
+
         });
     }
 
@@ -179,7 +188,7 @@ class LiftService
                 $current = $lift->current_floor;
 
                 // Re-sort remaining stops based on current direction
-                $stops = $this->sortStops($stops, $current, $lift->direction);
+                $stops = StopSorter::sortStops($stops, $current, $lift->direction);
 
                 // Update direction based on next stop
                 if (!empty($stops)) {
@@ -200,70 +209,4 @@ class LiftService
 
         });
     }
-
-    /**
-     * Calculate estimated time considering existing stops
-     */
-    public function sortStops(array $stops, int $currentFloor, string $direction): array
-    {
-        $direction = strtoupper(trim($direction));
-
-        // Convert "12" or 12 into ["floor" => 12] ONLY for sorting logic
-$stops = array_map(function ($s) {
-    if (is_string($s) || is_int($s)) {
-        return ["floor" => (int)$s, "original" => $s];
-    }
-    return $s;
-}, $stops);
-
-// Filter out invalid items
-$stops = array_values(array_filter($stops, fn($s) => isset($s["floor"])));
-
-
-        // Remove duplicates and current floor
-        //    $stops = array_values(array_filter($stops, fn($s) => $s["floor"] !== $currentFloor));
-
-        // Optional: remove duplicate floors
-        $stops = array_values(array_reduce($stops, function ($carry, $item) {
-            if (!in_array($item["floor"], array_column($carry, "floor"))) {
-                $carry[] = $item;
-            }
-            return $carry;
-        }, []));
-
-        if (empty($stops)) {
-            return [];
-        }
-
-        $upStops = array_filter($stops, fn($f) => $f["floor"] > $currentFloor);
-        $downStops = array_filter($stops, fn($f) => $f["floor"] < $currentFloor);
-
-        usort($upStops, function ($a, $b) {
-            return $a['floor'] <=> $b['floor'];   // ascending
-        });      // ascending
-        usort($downStops, function ($a, $b) {
-            return $b['floor'] <=> $a['floor'];   // descending
-        });
-
-        // If IDLE, determine direction from closest stop
-        if ($direction === 'IDLE') {
-            if (!empty($upStops) && !empty($downStops)) {
-                // Choose direction based on closest stop
-                $closestUp = $upStops[0][["floor"]] - $currentFloor;
-                $closestDown = $currentFloor - $downStops[0]["floor"];
-                $direction = $closestUp <= $closestDown ? 'UP' : 'DOWN';
-            } elseif (!empty($upStops)) {
-                $direction = 'UP';
-            } elseif (!empty($downStops)) {
-                $direction = 'DOWN';
-            }
-        }
-
-        if ($direction === 'UP') {
-            return array_values(array_merge($upStops, $downStops));
-        } else {
-            return array_values(array_merge($downStops, $upStops));
-        }
-    }
-
 }

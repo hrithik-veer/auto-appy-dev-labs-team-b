@@ -7,7 +7,8 @@ use Illuminate\Support\Facades\DB;
 use App\Helpers\FloorHelper;
 use App\Helpers\StopSorter;
 
-class LiftCaller {
+class LiftCaller
+{
     public function HandletLiftrequest(string $floor, string $direction)
     {
         // $this->startLiftEngineIfNotRunning();
@@ -135,7 +136,7 @@ class LiftCaller {
                 } else {
                     $lowest = !empty($stops)
                         ? min(array_column($stops, "floor"))
-                        : self::MIN_FLOOR;
+                        : FloorHelper::minNumber();
 
                     $finishTime = $cf - $lowest;
                     $finishPoint = $lowest;
@@ -192,7 +193,7 @@ class LiftCaller {
             ]);
         });
     }
-    
+
     private function calculateTimeWithStops(int $currentFloor, int $targetFloor, array $stops, string $requestedDirection, string $liftDirection = 'IDLE'): int
     {
         $requestedDirection = strtoupper($requestedDirection);
@@ -211,12 +212,10 @@ class LiftCaller {
             $stopsInDirection = array_filter($stops, fn($s) => $s['direction'] === 'UP' && $s['floor'] >= $currentFloor);
             $finishPoint = !empty($stopsInDirection) ? max(array_column($stopsInDirection, 'floor')) : max(array_column($stops, 'floor'));
             $finishTime = $finishPoint - $currentFloor;
-
         } elseif ($liftDirection === 'DOWN') {
             $stopsInDirection = array_filter($stops, fn($s) => $s['direction'] === 'DOWN' && $s['floor'] <= $currentFloor);
             $finishPoint = !empty($stopsInDirection) ? min(array_column($stopsInDirection, 'floor')) : min(array_column($stops, 'floor'));
             $finishTime = $currentFloor - $finishPoint;
-
         } else {
             // Idle lift, just treat stops as empty
             $finishPoint = $currentFloor;
@@ -286,5 +285,4 @@ class LiftCaller {
             return array_values(array_merge($downStops, $upStops));
         }
     }
-
 }

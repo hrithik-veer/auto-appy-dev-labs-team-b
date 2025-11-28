@@ -16,8 +16,8 @@ class RunLiftEngine extends Command
 
     public function handle()
     {
-
-        $this->info("🚀 Lift engine started...");
+        
+        $this->info("Lift engine started...");
 
         while (true) {
 
@@ -55,7 +55,8 @@ class RunLiftEngine extends Command
         }
 
         $current = $lift->current_floor;
-        $next = $stops[0]["floor"];
+        // $next = $stops[0]["floor"];
+        $next = is_array($stops[0])? $stops[0]["floor"] : $stops[0];
 
         if ($current < $next) {
             sleep(config('constants.LIFT_TRAVELLING_TIME'));

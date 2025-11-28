@@ -5,10 +5,10 @@ namespace App\Services;
 use App\Models\Lift;
 use Illuminate\Support\Facades\DB;
 use App\Helpers\FloorHelper;
-
+use App\Helpers\StopSorter;
 
 class LiftCaller {
-    public function requestLift1(string $floor, string $direction)
+    public function HandletLiftrequest(string $floor, string $direction)
     {
         // $this->startLiftEngineIfNotRunning();
 
@@ -180,7 +180,7 @@ class LiftCaller {
 
             // Sort stops based on current direction
             if (!empty($stops)) {
-                $stops = $this->sortStops($stops, $chosen->current_floor, $chosen->direction);
+                $stops = StopSorter::sortStops($stops, $chosen->current_floor, $chosen->direction);
             }
 
             $chosen->next_stops = $stops;
@@ -192,14 +192,6 @@ class LiftCaller {
             ]);
         });
     }
-                // return response()->json([
-            //     'lift' => [
-            //         'id' => $lift->id,
-            //         'current_floor' => FloorHelper::getFloorId($lift->current_floor),
-            //         'direction' => $lift->direction,
-            //         'next_stops' => $formattedStops
-            //     ]
-            // ]);
     
     private function calculateTimeWithStops(int $currentFloor, int $targetFloor, array $stops, string $requestedDirection, string $liftDirection = 'IDLE'): int
     {
@@ -219,10 +211,12 @@ class LiftCaller {
             $stopsInDirection = array_filter($stops, fn($s) => $s['direction'] === 'UP' && $s['floor'] >= $currentFloor);
             $finishPoint = !empty($stopsInDirection) ? max(array_column($stopsInDirection, 'floor')) : max(array_column($stops, 'floor'));
             $finishTime = $finishPoint - $currentFloor;
+
         } elseif ($liftDirection === 'DOWN') {
             $stopsInDirection = array_filter($stops, fn($s) => $s['direction'] === 'DOWN' && $s['floor'] <= $currentFloor);
             $finishPoint = !empty($stopsInDirection) ? min(array_column($stopsInDirection, 'floor')) : min(array_column($stops, 'floor'));
             $finishTime = $currentFloor - $finishPoint;
+
         } else {
             // Idle lift, just treat stops as empty
             $finishPoint = $currentFloor;
@@ -249,9 +243,6 @@ class LiftCaller {
     public function sortStops(array $stops, int $currentFloor, string $direction): array
     {
         $direction = strtoupper(trim($direction));
-
-        // Remove duplicates and current floor
-       // $stops = array_values(array_filter($stops, fn($s) => $s["floor"] !== $currentFloor));
 
         // Optional: remove duplicate floors
         $stops = array_values(array_reduce($stops, function ($carry, $item) {

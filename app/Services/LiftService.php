@@ -37,7 +37,7 @@ class LiftService
     }
 
     // Calling Request Lift function inside LiftCaller
-    
+
     protected $LiftCaller;
 
     public function __construct(LiftCaller $liftCaller)
@@ -47,7 +47,7 @@ class LiftService
 
     public function requestLift(string $floor, string $direction)
     {
-        return $this->LiftCaller->HandletLiftrequest($floor,$direction);
+        return $this->LiftCaller->HandletLiftrequest($floor, $direction);
     }
 
 
@@ -102,8 +102,8 @@ class LiftService
                 // Add to stops if not already there
                 if (!in_array($destination, $stops)) {
                     $stops[] = [
-                        "floor"=>$destination,
-                        "direction"=>null
+                        "floor" => $destination,
+                        "direction" => null
                     ];
                     $validDestinationsAdded = true;
                 }
@@ -139,13 +139,77 @@ class LiftService
 
             /** Convert numeric stops back to string for UI */
             $formattedStops = array_map(fn($n) => FloorHelper::getFloorId($n['floor']), $stops);
-
         });
     }
 
     /**
      * Cancel lift request(s)
      */
+    // public function cancelLift($liftId, array $floors)
+    // {
+    //     if (empty($floors)) {
+    //         return response()->json(['error' => 'No floors provided'], 400);
+    //     }
+
+    //     return DB::transaction(function () use ($liftId, $floors) {
+
+    //         // Lock lift row
+    //         $lift = Lift::where('id', $liftId)->lockForUpdate()->first();
+
+    //         if (!$lift) {
+    //             return response()->json(['error' => 'Lift not found'], 404);
+    //         }
+
+    //         $stops = $lift->next_stops ?? [];
+
+    //         // Convert all floor strings to numbers
+    //         $floorsToRemove = [];
+    //         foreach ($floors as $floorString) {
+    //             $num = FloorHelper::getFloorNo($floorString);
+
+    //             if ($num === null) {
+    //                 return response()->json([
+    //                     "error" => "Invalid floor: $floorString"
+    //                 ], 422);
+    //             }
+    //             $floorsToRemove[] = $num;
+    //         }
+
+    //         // Remove floors from queue
+    //         // $stops = array_values(array_filter($stops, function ($f) use ($floorsToRemove) {
+    //         //     return !in_array($f, $floorsToRemove);
+    //         // }));
+    //         $stops = array_values(array_filter($stops, function ($stop) use ($floorsToRemove) {
+    //             return !in_array($stop['floor'], $floorsToRemove);
+    //         }));
+
+
+    //         // Recalculate direction
+    //         if (empty($stops)) {
+    //             $lift->direction = 'IDLE';
+    //         } else {
+    //             $current = $lift->current_floor;
+
+    //             // Re-sort remaining stops based on current direction
+    //             $stops = StopSorter::sortStops($stops, $current, $lift->direction);
+
+    //             // Update direction based on next stop
+    //             if (!empty($stops)) {
+    //                 $nextStop = $stops[0];
+    //                 $lift->direction = $nextStop > $current ? 'UP' : 'DOWN';
+    //             }
+    //         }
+
+    //         $lift->next_stops = $stops;
+    //         $lift->save();
+
+    //         // Convert stops back to string form for UI
+    //         $formattedStops = array_map(
+    //             fn($n) => FloorHelper::getFloorId($n),
+    //             $stops
+    //         );
+    //     });
+    // }
     public function cancelLift($liftId, array $floors)
     {
         if (empty($floors)) {
@@ -163,7 +227,7 @@ class LiftService
 
             $stops = $lift->next_stops ?? [];
 
-            // Convert all floor strings to numbers
+            // Convert all floor strings (L1, B2 etc) to floor numbers
             $floorsToRemove = [];
             foreach ($floors as $floorString) {
                 $num = FloorHelper::getFloorNo($floorString);
@@ -176,103 +240,46 @@ class LiftService
                 $floorsToRemove[] = $num;
             }
 
-            // Remove floors from queue
-            $stops = array_values(array_filter($stops, function ($f) use ($floorsToRemove) {
-                return !in_array($f, $floorsToRemove);
+            // --- REMOVE STOPS MATCHING THESE FLOORS ---
+            $stops = array_values(array_filter($stops, function ($stop) use ($floorsToRemove) {
+                return !isset($stop['floor']) || !in_array($stop['floor'], $floorsToRemove);
             }));
 
-            // Recalculate direction
+            // --- RECALCULATE DIRECTION ---
             if (empty($stops)) {
+                // No more stops → lift becomes idle
                 $lift->direction = 'IDLE';
             } else {
                 $current = $lift->current_floor;
 
-                // Re-sort remaining stops based on current direction
+                // Sort stops based on existing direction
                 $stops = StopSorter::sortStops($stops, $current, $lift->direction);
 
-                // Update direction based on next stop
-                if (!empty($stops)) {
-                    $nextStop = $stops[0];
-                    $lift->direction = $nextStop > $current ? 'UP' : 'DOWN';
+                // Determine new direction from next stop
+                $nextStop = $stops[0]['floor'];
+
+                if ($nextStop > $current) {
+                    $lift->direction = 'UP';
+                } elseif ($nextStop < $current) {
+                    $lift->direction = 'DOWN';
+                } else {
+                    $lift->direction = 'IDLE';
                 }
             }
 
             $lift->next_stops = $stops;
             $lift->save();
 
-            // Convert stops back to string form for UI
-            $formattedStops = array_map(
-                fn($n) => FloorHelper::getFloorId($n),
-                $stops
-            );
+            // Convert back to UI-friendly format (L1, B2 etc)
+            $formattedStops = array_map(function ($stop) {
+                return FloorHelper::getFloorId($stop['floor']);
+            }, $stops);
 
-
+            return response()->json([
+                "message" => "Stops removed successfully",
+                "remainingStops" => $formattedStops,
+                "direction" => $lift->direction
+            ]);
         });
     }
-
-    /**
-     * Calculate estimated time considering existing stops
-     */
-    public function sortStops(array $stops, int $currentFloor, string $direction): array
-    {
-        $direction = strtoupper(trim($direction));
-
-        // Convert "12" or 12 into ["floor" => 12] ONLY for sorting logic
-$stops = array_map(function ($s) {
-    if (is_string($s) || is_int($s)) {
-        return ["floor" => (int)$s, "original" => $s];
-    }
-    return $s;
-}, $stops);
-
-// Filter out invalid items
-$stops = array_values(array_filter($stops, fn($s) => isset($s["floor"])));
-
-
-        // Remove duplicates and current floor
-        //    $stops = array_values(array_filter($stops, fn($s) => $s["floor"] !== $currentFloor));
-
-        // Optional: remove duplicate floors
-        $stops = array_values(array_reduce($stops, function ($carry, $item) {
-            if (!in_array($item["floor"], array_column($carry, "floor"))) {
-                $carry[] = $item;
-            }
-            return $carry;
-        }, []));
-
-        if (empty($stops)) {
-            return [];
-        }
-
-        $upStops = array_filter($stops, fn($f) => $f["floor"] > $currentFloor);
-        $downStops = array_filter($stops, fn($f) => $f["floor"] < $currentFloor);
-
-        usort($upStops, function ($a, $b) {
-            return $a['floor'] <=> $b['floor'];   // ascending
-        });      // ascending
-        usort($downStops, function ($a, $b) {
-            return $b['floor'] <=> $a['floor'];   // descending
-        });
-
-        // If IDLE, determine direction from closest stop
-        if ($direction === 'IDLE') {
-            if (!empty($upStops) && !empty($downStops)) {
-                // Choose direction based on closest stop
-                $closestUp = $upStops[0][["floor"]] - $currentFloor;
-                $closestDown = $currentFloor - $downStops[0]["floor"];
-                $direction = $closestUp <= $closestDown ? 'UP' : 'DOWN';
-            } elseif (!empty($upStops)) {
-                $direction = 'UP';
-            } elseif (!empty($downStops)) {
-                $direction = 'DOWN';
-            }
-        }
-
-        if ($direction === 'UP') {
-            return array_values(array_merge($upStops, $downStops));
-        } else {
-            return array_values(array_merge($downStops, $upStops));
-        }
-    }
-
 }

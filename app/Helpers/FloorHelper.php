@@ -49,8 +49,4 @@ class FloorHelper
     {
         return max(self::$floorMapping);
     }
-     public static function minNumber(): int
-    {
-        return min(self::$floorMapping);
-    }
 }

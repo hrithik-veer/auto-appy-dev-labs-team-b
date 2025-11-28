@@ -39,12 +39,12 @@ class LiftService
 
     public function __construct(LiftCaller $liftCaller)
     {
-        $this->liftCaller = $liftCaller;
+        $this->LiftCaller = $liftCaller;
     }
 
     public function requestLift(string $floor, string $direction)
     {
-        return $this->liftCaller->requestLift1($floor,$direction);
+        return $this->LiftCaller->requestLift1($floor,$direction);
     }
 
 

@@ -135,7 +135,7 @@ class LiftCaller {
                 } else {
                     $lowest = !empty($stops)
                         ? min(array_column($stops, "floor"))
-                        : self::MIN_FLOOR;
+                        : FloorHelper::minNumber();
 
                     $finishTime = $cf - $lowest;
                     $finishPoint = $lowest;

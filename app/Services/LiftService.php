@@ -437,7 +437,7 @@ class LiftService
         $direction = strtoupper(trim($direction));
 
         // Remove duplicates and current floor
-       // $stops = array_values(array_filter($stops, fn($s) => $s["floor"] !== $currentFloor));
+        // $stops = array_values(array_filter($stops, fn($s) => $s["floor"] !== $currentFloor));
 
         // Optional: remove duplicate floors
         $stops = array_values(array_reduce($stops, function ($carry, $item) {

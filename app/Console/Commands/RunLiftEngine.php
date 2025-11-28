@@ -13,10 +13,10 @@ class RunLiftEngine extends Command
 {
     protected $signature = 'lift:run';
     protected $description = 'Move all lifts continuously like a real elevator engine';
-    
+
     public function handle()
     {
-        
+
         $this->info("🚀 Lift engine started...");
 
         while (true) {
@@ -88,8 +88,4 @@ class RunLiftEngine extends Command
             $lift->save();
         }
     }
-
-
-
-   
 }

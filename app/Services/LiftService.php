@@ -11,6 +11,23 @@ use Illuminate\Support\Facades\Cache;
 use App\Services\LiftCaller;
 use App\Helpers\StopSorter;
 
+
+
+/**
+ * Class LiftService
+ *
+ * This service handles all lift-related business logic such as:
+ * - Fetching lift states from Redis
+ * - Updating lift movements
+ * - Managing next stops queues
+ * - Assigning lifts to users
+ *
+ * Service classes are used to separate business logic from controllers
+ * for better readability, testing, and maintainability.
+ */
+
+
+
 class LiftService
 {
     private const MIN_FLOOR = 1;
@@ -37,7 +54,14 @@ class LiftService
         }
     }
 
-    // Calling Request Lift function inside LiftCaller
+    /**
+     * Constructor
+     *
+     * Injects the LiftService to handle core lift assignment logic.
+     *
+     * @param LiftService $service
+     */
+
 
     protected $LiftCaller;
 
@@ -46,15 +70,55 @@ class LiftService
         $this->LiftCaller = $liftCaller;
     }
 
+
+
+
+    /**
+     * 
+     *  
+     * Assign a user request to the best lift.
+     *
+     * Logic:
+     * - Check nearest lift
+     * - Consider direction & movement
+     * - Add destination floor to next_stops queue
+     *
+     * @param int $floor
+     * @param string $direction (UP | DOWN)
+     * @return array  Lift assignment details
+     *
+     */
+
+
+
+
     public function requestLift(string $floor, string $direction)
     {
         return $this->LiftCaller->HandletLiftrequest($floor, $direction);
     }
 
 
+    
+
     /**
      * Add destination floors from inside the lift
+     *  
+     *
+     *
+     * Logic:
+     * - Pass the lift Id into the url.
+     * - Also pass the destination floor where to go.
+     * - Add destination floor to next_stops queue
+     *
+     * @param int $liftId
+     * @param string $destination floor 
+     * @return array  destination floor added in next_stops[]
+     *
      */
+
+
+
+
     public function addDestination(array $destinations, $liftId)
     {
         if (empty($destinations)) {
@@ -150,6 +214,27 @@ class LiftService
         ]);
     }
 
+
+
+
+
+
+        /**
+     * Class CancelLiftService
+     *
+     * This service handles the cancellation of lift requests.
+     * When a user cancels a request, the destination floor must be removed
+     * from the lift's `next_stops` queue stored in Redis.
+     *
+     * Responsibilities:
+     * - Validate lift existence
+     * - Fetch and modify next_stops list
+     * - Remove specific floor from queue
+     * - Update Redis with new queue
+     *
+     * This service keeps cancellation logic separate from the controller,
+     * improving testability, readability, and maintainability.
+     */
 
     public function cancelLift($liftId, array $floors)
     {

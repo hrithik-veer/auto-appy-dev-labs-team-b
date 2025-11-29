@@ -10,14 +10,87 @@ use App\Helpers\FloorHelper;
 use Illuminate\Support\Facades\Redis;
 use Predis\Command\Redis\HMSET;
 
+
+
+
+
+/**
+    * CallLiftController
+    * ------------------------------------------------------------
+    * This controller handles all API operations related to lift requests,
+    * real-time lift state retrieval, and communication between frontend
+    * (React) and backend lift logic (LiftService + Redis).
+    *
+    * Responsibilities:
+    *  - Receive API requests from frontend
+    *  - Validate incoming data
+    *  - Call appropriate  methods (LiftService)
+    *  - Return clean JSON responses
+    *
+    * This controller SHOULD NOT contain business logic. All logic is handled
+    * inside LiftService or CacheHelper classes.
+    */
 class CallLiftController extends Controller
 {
     protected $liftService;
+
+    /**
+     * Constructor
+     *
+     * Injects the LiftService to handle core lift assignment logic.
+     *
+     * @param LiftService $service
+     */
 
     public function __construct(LiftService $liftService)
     {
         $this->liftService = $liftService;
     }
+
+
+
+
+
+    /**
+     * API: Request a Lift
+     * -------------------------------
+     * Endpoint: POST /api/request-lift
+     *
+     * Purpose:
+     *  Handles a user's lift request. The controller validates the input
+     *  and then delegates the assignment logic to LiftService. The backend
+     *  returns the assigned lift along with its updated state.
+     *
+     * Request Body:
+     * ```
+     * {
+     *     "floor": 5,
+     *     "direction": "UP"
+     * }
+     * ```
+     *
+     * Valid Directions:
+     *  - UP
+     *  - DOWN
+     *
+     * Response Example:
+     * ```
+     * {
+     *   "success": true,
+     *   "message": "Lift assigned successfully",
+     *   "lift": {
+     *       "lift_id": "L2",
+     *       "current_floor": 3,
+     *       "direction": "UP",
+     *       "next_stops": [5, 7]
+     *   }
+     * }
+     * ```
+     *
+     * @param Request $request
+     * @return JsonResponse
+     */
+
 
     public function request(Request $request)
     {
@@ -34,6 +107,32 @@ class CallLiftController extends Controller
         return $lift;
     }
 
+
+    /**
+     * API: Add the Destination/traget floor Where to go.
+     * -----------------------------------
+     * Endpoint: POST /api/lifts/{liftId}
+     *
+     * Purpose:
+     * 
+     *  This API is typically called repeatedly by the frontend (React)
+     *  This endpoint is used when a passenger enters a lift and selects a destination floor.
+     *
+     * 
+     * ```
+     *  The backend:
+     *
+     *   Fetches the current lift state from Redis
+     *   Adds the destination floor to the lift's next_stops queue
+     *   Updates Redis with the new queue
+     *  
+     * Response :
+     * 
+     * Lift Moved
+     * 
+     */
+
+
     public function addDestination(Request $request, $liftId)
     {
         $request->validate([
@@ -47,6 +146,23 @@ class CallLiftController extends Controller
         );
         return "lift moved";
     }
+
+
+
+
+
+    /**
+     * API: Cancel the Destination/traget floor Where to go.
+     * -----------------------------------
+     * Endpoint: POST /api/lifts/{liftId}/cancelled
+     *
+     * Purpose:
+     * 
+     *  Removes a requested floor from the lift's queue before the lift arrives.
+     *     
+     * 
+     */
+
     public function cancelStop(Request $request, $lift_id)
     {
         $request->validate([
@@ -59,6 +175,41 @@ class CallLiftController extends Controller
             liftId: $lift_id
         );
     }
+
+
+
+
+    /**
+     * API: Get All Lift States
+     * -----------------------------------
+     * Endpoint: GET /api/lifts
+     *
+     * Purpose:
+     *  Returns the real-time state of all lifts from Redis cache.  
+     *  This API is typically called repeatedly by the frontend (React)
+     *  using useEffect to show dynamic lift movement.
+     *
+     * Response Example:
+     * ```
+     * [
+     *   {
+     *     "lift_id": "L1",
+     *     "current_floor": 4,
+     *     "direction": "DOWN",
+     *     "next_stops": [1]
+     *   },
+     *   {
+     *     "lift_id": "L2",
+     *     "current_floor": 7,
+     *     "direction": "IDLE",
+     *     "next_stops": []
+     *   }
+     * ]
+     * ```
+     *
+     * @return JsonResponse
+     */
+
 
     public function getAllLifts()
     {
@@ -92,6 +243,37 @@ class CallLiftController extends Controller
         }
         return response()->json($formatted);
     }
+
+
+
+    /**
+     * API: Reset All Lift States
+     * -----------------------------------
+     * Endpoint: Put /api/lifts
+     * 
+     * 
+     * Resets all lift data, deletes Redis keys, and reinitializes default lift states.
+     * 
+     * Request Body
+     *
+     * ---No request body required.
+     * 
+     * Response Body
+     * 
+     * {
+     *  "lift_id": "L1",
+     *  "current_floor": 0,
+     *  "direction": "IDLE",
+     *  "next_stops": []
+     *  },
+     *  {
+     *  "lift_id": "L2",
+     *  "current_floor": 0,
+     *  "direction": "IDLE",
+     *  "next_stops": []
+     *  }
+     *  
+     */
 
 
     public function resetData()

@@ -9,24 +9,48 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 
-Route::controller(CallLiftController::class)->group(function(){
-    Route::post('/lifts', 'request');
-    Route::post('/lifts/{lift_id}', 'addDestination');
-    Route::post('/lifts/{lift_id}/cancel' ,'cancelStop');
-    Route::get('/alllifts', 'getAllLifts');
-    Route::put('/lifts/reset','resetData');
+    /*
+    |--------------------------------------------------------------------------
+    | API Routes
+    |--------------------------------------------------------------------------
+    |
+    | This file defines all API endpoints exposed by the application.
+    | Each route maps an HTTP request to a controller method.
+    | These routes handle lift operations, user requests, reset actions,
+    | cancellations, and data fetching.
+    |
+    */
 
-});
-Route::get('/cart', function () {
-    session()->put('cart', [
-        [
-            "item" => "RTX 3050",
-            "price" => 1450
-        ]
-    ]);
+    /**
+     * POST /api/lifts
+     * Assigned the Best lift of requested people:
+     * 
+     *   
+     * POST /api/lifts/{liftId}
+     * Add the Destination of assigned lift.
+     * 
+     * 
+     * POST /api/lifts/{liftId}/cancel
+     * Cancels a user's previously created lift request.
+     * 
+     * 
+     * POST /api/lifts/reset
+     * Resets all lifts to default state.
+     * 
+     * 
+     * GET /api/lifts
+     * Fetches the live status of all lifts including:
+     * 
+     * 
+     * @return JSON
+     */
 
-    session()->save(); // important
+    Route::controller(CallLiftController::class)->group(function(){
+        Route::post('/lifts', 'request');
+        Route::post('/lifts/{lift_id}', 'addDestination');
+        Route::post('/lifts/{lift_id}/cancel' ,'cancelStop');
+        Route::get('/alllifts', 'getAllLifts');
+        Route::put('/lifts/reset','resetData');
+    });
 
-    return "Session Stored";
-});
 

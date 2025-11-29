@@ -12,6 +12,32 @@ use Illuminate\Console\Command;
 use App\Console\Commands\LoadLiftsToRedis;
 use App\Models\Lift;
 
+
+
+/**
+ * Class LiftEngine
+ *
+ * The LiftEngine is the core background processor responsible for
+ * **moving lifts**, **updating their floors**, **handling next stops**, and
+ * **synchronizing live lift states in Redis**.
+ *
+ * ---------------------------------------------------------
+ * Responsibilities:
+ * ---------------------------------------------------------
+ * - Move lifts one floor every cycle (1 second, or custom interval)
+ * - Update direction ("UP", "DOWN", "IDLE")
+ * - Fetch and process the next_stops queue
+ * - Open/close doors when a lift reaches a destination
+ * - Remove served floors from the queue
+ * - Save all new states back to Redis
+ * - When all lifts become IDLE, push final state to database (optional)
+ *
+ * This engine ensures real-time lift movement WITHOUT using
+ * database queries — making it extremely fast and scalable.
+ */
+
+
+
 class RunLiftEngine extends Command
 {
     protected $signature = 'lift:run';

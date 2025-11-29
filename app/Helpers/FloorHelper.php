@@ -2,6 +2,30 @@
 
 namespace App\Helpers;
 
+
+
+
+/**
+ * Class FloorHelper
+ *
+ * Utility helper class for performing all floor-related calculations
+ * and validations in the lift system.
+ *
+ * ---------------------------------------------------------
+ * Responsibilities:
+ * ---------------------------------------------------------
+ * - Validate requested floors
+ * - Check building floor range (min/max)
+ * - Normalize floor values (convert to int)
+ * - Provide helper functions for direction logic
+ * - Support RequestLiftService, LiftCaller, and LiftEngine
+ *
+ * This class keeps low-level utility logic separate from services,
+ * improving reusability, cleanliness, and maintainability.
+ */
+
+
+
 class FloorHelper
 {
     // FLOOR STRING → NUMBER (DB)

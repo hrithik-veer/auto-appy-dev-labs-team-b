@@ -6,7 +6,35 @@ use App\Models\Lift;
 use Illuminate\Support\Facades\DB;
 use App\Helpers\FloorHelper;
 use App\Helpers\StopSorter;
+use App\Models\Lift as ModelsLift;
 use Illuminate\Support\Facades\Redis;
+
+
+
+
+
+/**
+ * Class LiftCaller
+ *
+ * The LiftCaller service is responsible for selecting the most optimal lift
+ * when a user requests a ride.
+ *
+ * This class is used by RequestLiftService and acts as a dedicated
+ * "lift selection engine".
+ *
+ * ---------------------------------------------------------
+ * Responsibilities:
+ * ---------------------------------------------------------
+ * - Fetch all lifts and their statuses from Redis
+ * - Calculate distance between lifts and user floor
+ * - Check lift direction and idle positions
+ * - Determine the best available lift
+ * - Return lift ID to RequestLiftService
+ *
+ * This class contains all algorithmic logic so that the controller and
+ * RequestLiftService remain clean and readable.
+ */
+
 
 
 class LiftCaller
@@ -244,41 +272,4 @@ class LiftCaller
     }
 
 
-    // public static function redisToDB()
-    // {
-    //     $keys = Redis::keys("lift:");  // safer than Redis::keys("")
-    //     $idleLifts = [];
-
-    //     foreach ($keys as $liftKey) {
-
-    //         $lift = Redis::hGetAll($liftKey);
-
-    //         if (empty($lift)) {
-    //             continue;
-    //         }
-
-    //         // Check if lift is idle
-    //         if (isset($lift["direction"]) && $lift["direction"] === "IDLE") {
-    //             $idleLifts[] = $lift;
-    //         }
-    //     }
-
-    //     // If all 4 lifts idle → sync to DB
-    //     if (count($idleLifts) === 4) {
-
-    //         foreach ($idleLifts as $cachedLift) {
-
-    //             $liftModel = Lift::where('lift_id', $cachedLift['lift_id'])->first();
-
-    //             if (!$liftModel) continue;
-
-    //             $liftModel->current_floor = $cachedLift['current_floor'];
-    //             $liftModel->direction     = $cachedLift['direction'];
-    //             $liftModel->next_stops    = json_decode($cachedLift['next_stops'], true) ?? [];
-    //             $liftModel->status        = $cachedLift['status'];
-
-    //             $liftModel->save();
-    //         }
-    //     }
-    // }
 }

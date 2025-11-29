@@ -184,7 +184,7 @@ class LiftCaller
         Redis::hset($liftKey, 'next_stops', json_encode($sortedStops));
         Redis::hset($liftKey, 'updated_at', now()->toDateTimeString());
 
-        return response()->json(['liftId' => $chosen['liftId']]);
+        return response()->json(['liftId' => $chosen['id']]);
     }
 
 

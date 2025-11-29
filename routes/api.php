@@ -15,4 +15,18 @@ Route::controller(CallLiftController::class)->group(function(){
     Route::post('/lifts/{lift_id}/cancel' ,'cancelStop');
     Route::get('/alllifts', 'getAllLifts');
     Route::put('/lifts/reset','resetData');
+
 });
+Route::get('/cart', function () {
+    session()->put('cart', [
+        [
+            "item" => "RTX 3050",
+            "price" => 1450
+        ]
+    ]);
+
+    session()->save(); // important
+
+    return "Session Stored";
+});
+

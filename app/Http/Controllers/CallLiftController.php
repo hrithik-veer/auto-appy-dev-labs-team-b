@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 use App\Services\LiftService;
 use App\Models\Lift;
 use App\Helpers\FloorHelper;
+use Illuminate\Support\Facades\Redis;
+use Predis\Command\Redis\HMSET;
 
 class CallLiftController extends Controller
 {
@@ -31,8 +33,6 @@ class CallLiftController extends Controller
 
         return $lift;
     }
-
-
 
     public function addDestination(Request $request, $liftId)
     {
@@ -62,21 +62,34 @@ class CallLiftController extends Controller
 
     public function getAllLifts()
     {
-        $lifts = Lift::all();
+        // 1. Fetch all lifts 
+        $keys = Redis::keys('lift:*');
 
-        $formatted = $lifts->map(function ($lift) {
+        if (empty($keys)) {
+            return response()->json([]);
+        }
+        $formatted = [];
 
-            $queue = is_array($lift->stops)
-                ? $lift->stops
-                : json_decode($lift->stops ?? "[]", true);
-            return [
-                "liftId"     => $lift->id,
-                "floor"      => FloorHelper::getFloorId($lift->current_floor),
-                "direction"  => $lift->direction,
-                "queue"      => $queue // if stored as JSON
+        foreach ($keys as $key) {
+            // 2. read full hash from redis
+            $data = Redis::HGETALL($key);
+
+            // Skipped Corrupted Files
+            if (empty($data)) {
+                continue;
+            }
+
+            // 3. Decode next_stops JSON
+            $queue = !empty($data["next_stops"]) ? json_decode($data["next_stops"], true) : [];
+
+            //4. formatted Output
+            $formatted[] = [
+                'lift_id' => $data["liftId"][1],
+                "floor" => FloorHelper::getFloorId($data["current_floor"]),
+                "direction" => $data["direction"],
+                "queue" => $queue
             ];
-        });
-
+        }
         return response()->json($formatted);
     }
 
@@ -89,56 +102,18 @@ class CallLiftController extends Controller
             'next_stops' => json_encode([]),  // empty queue
         ]);
 
-        return "Data Successfully Reset";
+        $keys = Redis::keys("lift:*");
+
+        foreach ($keys as $key) {
+            Redis::hmset(
+                $key,
+                [
+                    "current_floor" => 1,
+                    "direction" => "IDLE",
+                    "next_stops" => json_encode([]),
+                    'updated_at' => now()->toDateTimeString(),
+                ]
+            );
+        }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-   

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Lift;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use App\Helpers\FloorHelper;
 use Illuminate\Support\Facades\Cache;
 
@@ -60,226 +61,166 @@ class LiftService
             return response()->json(['error' => 'No destinations provided'], 400);
         }
 
-        // We are starting a DB Transaction where all queries inside must either 
-        // succeed together or fail together.
-        return DB::transaction(function () use ($destinations, $liftId) {
+        // Redis key for this lift
+        $liftKey = "lift:l{$liftId}";
 
-            // Lock lifts
-            $lift = Lift::where('id', $liftId)->lockForUpdate()->first();
+        // Fetch lift from Redis
+        $liftData = Redis::hgetall($liftKey);
 
-            // Check If lift exists 
-            if (!$lift) {
-                return response()->json(['error' => 'Lift not found'], 404);
-            }
+        if (empty($liftData)) {
+            return response()->json(['error' => 'Lift not found'], 404);
+        }
 
-            $current = $lift->current_floor;
-            $stops = $lift->next_stops ?? [];
-            $validDestinationsAdded = false;
+        $current = isset($liftData['current_floor']) ? (int)$liftData['current_floor'] : 1;
+        $stops = !empty($liftData['next_stops']) ? json_decode($liftData['next_stops'], true) : [];
+        $liftDirection = $liftData['direction'] ?? 'IDLE';
+        $validDestinationsAdded = false;
 
-            foreach ($destinations as $floorString) {
+        foreach ($destinations as $floorString) {
+            $destination = FloorHelper::getFloorNo($floorString);
 
-                // Convert B1/G/UG/10 → number
-                $destination = FloorHelper::getFloorNo($floorString);
-
-                if ($destination === null) {
-                    return response()->json([
-                        "error" => "Invalid floor: $floorString"
-                    ], 422);
-                }
-
-                // Validate floor bounds
-                if ($destination < self::MIN_FLOOR || $destination > self::MAX_FLOOR) {
-                    return response()->json([
-                        "error" => "Floor out of range: $floorString"
-                    ], 422);
-                }
-
-                // Skip if already at this floor
-                if ($destination === $current) {
-                    continue;
-                }
-
-                // Add to stops if not already there
-                if (!in_array($destination, $stops)) {
-                    $stops[] = [
-                        "floor" => $destination,
-                        "direction" => null
-                    ];
-                    $validDestinationsAdded = true;
-                }
-            }
-
-            // If no valid stops were added
-            if (!$validDestinationsAdded) {
+            if ($destination === null) {
                 return response()->json([
-                    'lift' => [
-                        'id' => $lift->id,
-                        'current_floor' => FloorHelper::getFloorId($lift->current_floor),
-                        'direction' => $lift->direction,
-                        'next_stops' => array_map(fn($n) => FloorHelper::getFloorId($n), $stops)
-                    ],
-                    'message' => 'Already at requested floor(s) or destinations already queued'
-                ]);
+                    "error" => "Invalid floor: $floorString"
+                ], 422);
             }
 
-            // Sort stops FIRST before determining direction
-            $stops = StopSorter::sortStops($stops, $current, $lift->direction);
-            foreach ($stops as $i => $s) {
-                $stops[$i]["direction"] = ($s["floor"] > $current) ? "UP" : "DOWN";
+            if ($destination < self::MIN_FLOOR || $destination > self::MAX_FLOOR) {
+                return response()->json([
+                    "error" => "Floor out of range: $floorString"
+                ], 422);
             }
 
-            /** Set direction if idle - use FIRST SORTED stop */
-            if (strtoupper(trim($lift->direction)) === 'IDLE' && !empty($stops)) {
-                $firstStop = $stops[0]; // Now this is correctly the first sorted stop
-                $lift->direction = $firstStop > $current ? 'UP' : 'DOWN';
+            if ($destination === $current) {
+                continue;
             }
 
-            $lift->next_stops = $stops;
-            $lift->save();
+            // Add to stops if not already present
+            if (!in_array($destination, array_column($stops, 'floor'))) {
+                $stops[] = [
+                    "floor" => $destination,
+                    "direction" => null
+                ];
+                $validDestinationsAdded = true;
+            }
+        }
 
-            /** Convert numeric stops back to string for UI */
-            $formattedStops = array_map(fn($n) => FloorHelper::getFloorId($n['floor']), $stops);
-        });
+        if (!$validDestinationsAdded) {
+            return response()->json([
+                'lift' => [
+                    'id' => $liftId,
+                    'current_floor' => FloorHelper::getFloorId($current),
+                    'direction' => $liftDirection,
+                    'next_stops' => array_map(fn($n) => FloorHelper::getFloorId($n['floor']), $stops)
+                ],
+                'message' => 'Already at requested floor(s) or destinations already queued'
+            ]);
+        }
+
+        // Sort stops
+        $stops = StopSorter::sortStops($stops, $current, $liftDirection);
+        foreach ($stops as $i => $s) {
+            $stops[$i]["direction"] = ($s["floor"] > $current) ? "UP" : "DOWN";
+        }
+
+        // Set direction if idle
+        if (strtoupper(trim($liftDirection)) === 'IDLE' && !empty($stops)) {
+            $firstStop = $stops[0];
+            $liftDirection = $firstStop['floor'] > $current ? 'UP' : 'DOWN';
+        }
+
+        // Save back to Redis
+        Redis::hmset($liftKey, [
+            'direction' => $liftDirection,
+            'next_stops' => json_encode($stops),
+            'updated_at' => now()->toDateTimeString(),
+        ]);
+
+        // Return formatted stops for UI
+        $formattedStops = array_map(fn($n) => FloorHelper::getFloorId($n['floor']), $stops);
+
+        return response()->json([
+            'lift' => [
+                'id' => $liftId,
+                'current_floor' => FloorHelper::getFloorId($current),
+                'direction' => $liftDirection,
+                'next_stops' => $formattedStops
+            ],
+            'message' => 'Destinations added successfully'
+        ]);
     }
 
-    /**
-     * Cancel lift request(s)
-     */
-    // public function cancelLift($liftId, array $floors)
-    // {
-    //     if (empty($floors)) {
-    //         return response()->json(['error' => 'No floors provided'], 400);
-    //     }
 
-    //     return DB::transaction(function () use ($liftId, $floors) {
-
-    //         // Lock lift row
-    //         $lift = Lift::where('id', $liftId)->lockForUpdate()->first();
-
-    //         if (!$lift) {
-    //             return response()->json(['error' => 'Lift not found'], 404);
-    //         }
-
-    //         $stops = $lift->next_stops ?? [];
-
-    //         // Convert all floor strings to numbers
-    //         $floorsToRemove = [];
-    //         foreach ($floors as $floorString) {
-    //             $num = FloorHelper::getFloorNo($floorString);
-
-    //             if ($num === null) {
-    //                 return response()->json([
-    //                     "error" => "Invalid floor: $floorString"
-    //                 ], 422);
-    //             }
-    //             $floorsToRemove[] = $num;
-    //         }
-
-    //         // Remove floors from queue
-    //         // $stops = array_values(array_filter($stops, function ($f) use ($floorsToRemove) {
-    //         //     return !in_array($f, $floorsToRemove);
-    //         // }));
-    //         $stops = array_values(array_filter($stops, function ($stop) use ($floorsToRemove) {
-    //             return !in_array($stop['floor'], $floorsToRemove);
-    //         }));
-
-
-    //         // Recalculate direction
-    //         if (empty($stops)) {
-    //             $lift->direction = 'IDLE';
-    //         } else {
-    //             $current = $lift->current_floor;
-
-    //             // Re-sort remaining stops based on current direction
-    //             $stops = StopSorter::sortStops($stops, $current, $lift->direction);
-
-    //             // Update direction based on next stop
-    //             if (!empty($stops)) {
-    //                 $nextStop = $stops[0];
-    //                 $lift->direction = $nextStop > $current ? 'UP' : 'DOWN';
-    //             }
-    //         }
-
-    //         $lift->next_stops = $stops;
-    //         $lift->save();
-
-    //         // Convert stops back to string form for UI
-    //         $formattedStops = array_map(
-    //             fn($n) => FloorHelper::getFloorId($n),
-    //             $stops
-    //         );
-    //     });
-    // }
     public function cancelLift($liftId, array $floors)
     {
         if (empty($floors)) {
             return response()->json(['error' => 'No floors provided'], 400);
         }
 
-        return DB::transaction(function () use ($liftId, $floors) {
+        // Redis key for this lift
+        $liftKey = "lift:l{$liftId}";
 
-            // Lock lift row
-            $lift = Lift::where('id', $liftId)->lockForUpdate()->first();
+        // Fetch lift from Redis
+        $liftData = Redis::hgetall($liftKey);
 
-            if (!$lift) {
-                return response()->json(['error' => 'Lift not found'], 404);
+        if (empty($liftData)) {
+            return response()->json(['error' => 'Lift not found'], 404);
+        }
+
+        $current = isset($liftData['current_floor']) ? (int)$liftData['current_floor'] : 1;
+        $stops = !empty($liftData['next_stops']) ? json_decode($liftData['next_stops'], true) : [];
+        $liftDirection = $liftData['direction'] ?? 'IDLE';
+
+        // Convert floor strings to numbers
+        $floorsToRemove = [];
+        foreach ($floors as $floorString) {
+            $num = FloorHelper::getFloorNo($floorString);
+
+            if ($num === null) {
+                return response()->json([
+                    "error" => "Invalid floor: $floorString"
+                ], 422);
             }
+            $floorsToRemove[] = $num;
+        }
 
-            $stops = $lift->next_stops ?? [];
+        // Remove stops matching these floors
+        $stops = array_values(array_filter($stops, function ($stop) use ($floorsToRemove) {
+            return !isset($stop['floor']) || !in_array($stop['floor'], $floorsToRemove);
+        }));
 
-            // Convert all floor strings (L1, B2 etc) to floor numbers
-            $floorsToRemove = [];
-            foreach ($floors as $floorString) {
-                $num = FloorHelper::getFloorNo($floorString);
+        // Recalculate direction
+        if (empty($stops)) {
+            $liftDirection = 'IDLE';
+        } else {
+            // Sort stops based on existing direction
+            $stops = StopSorter::sortStops($stops, $current, $liftDirection);
 
-                if ($num === null) {
-                    return response()->json([
-                        "error" => "Invalid floor: $floorString"
-                    ], 422);
-                }
-                $floorsToRemove[] = $num;
-            }
+            $nextStop = $stops[0]['floor'] ?? $current;
 
-            // --- REMOVE STOPS MATCHING THESE FLOORS ---
-            $stops = array_values(array_filter($stops, function ($stop) use ($floorsToRemove) {
-                return !isset($stop['floor']) || !in_array($stop['floor'], $floorsToRemove);
-            }));
-
-            // --- RECALCULATE DIRECTION ---
-            if (empty($stops)) {
-                // No more stops → lift becomes idle
-                $lift->direction = 'IDLE';
+            if ($nextStop > $current) {
+                $liftDirection = 'UP';
+            } elseif ($nextStop < $current) {
+                $liftDirection = 'DOWN';
             } else {
-                $current = $lift->current_floor;
-
-                // Sort stops based on existing direction
-                $stops = StopSorter::sortStops($stops, $current, $lift->direction);
-
-                // Determine new direction from next stop
-                $nextStop = $stops[0]['floor'];
-
-                if ($nextStop > $current) {
-                    $lift->direction = 'UP';
-                } elseif ($nextStop < $current) {
-                    $lift->direction = 'DOWN';
-                } else {
-                    $lift->direction = 'IDLE';
-                }
+                $liftDirection = 'IDLE';
             }
+        }
 
-            $lift->next_stops = $stops;
-            $lift->save();
+        // Save back to Redis
+        Redis::hmset($liftKey, [
+            'direction' => $liftDirection,
+            'next_stops' => json_encode($stops),
+            'updated_at' => now()->toDateTimeString(),
+        ]);
 
-            // Convert back to UI-friendly format (L1, B2 etc)
-            $formattedStops = array_map(function ($stop) {
-                return FloorHelper::getFloorId($stop['floor']);
-            }, $stops);
+        // Convert numeric stops back to string for UI
+        $formattedStops = array_map(fn($stop) => FloorHelper::getFloorId($stop['floor']), $stops);
 
-            return response()->json([
-                "message" => "Stops removed successfully",
-                "remainingStops" => $formattedStops,
-                "direction" => $lift->direction
-            ]);
-        });
+        return response()->json([
+            "message" => "Stops removed successfully",
+            "remainingStops" => $formattedStops,
+            "direction" => $liftDirection
+        ]);
     }
 }

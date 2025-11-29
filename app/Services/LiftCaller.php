@@ -6,14 +6,13 @@ use App\Models\Lift;
 use Illuminate\Support\Facades\DB;
 use App\Helpers\FloorHelper;
 use App\Helpers\StopSorter;
+use Illuminate\Support\Facades\Redis;
+
 
 class LiftCaller
 {
     public function HandletLiftrequest(string $floor, string $direction)
     {
-        // $this->startLiftEngineIfNotRunning();
-
-        // Convert UI string → DB integer
         $requestedFloor = FloorHelper::getFloorNo($floor);
 
         if ($requestedFloor === null) {
@@ -21,180 +20,175 @@ class LiftCaller
         }
 
         $direction = strtoupper(trim($direction));
-
         if (!in_array($direction, ['UP', 'DOWN'])) {
             return response()->json(['error' => 'Invalid direction'], 400);
         }
 
-        return DB::transaction(function () use ($requestedFloor, $direction, $floor) {
+        // ------------------ FETCH ALL LIFTS FROM REDIS ------------------
+        $liftKeys = Redis::keys("lift:*");
+        if (empty($liftKeys)) {
+            return response()->json(['error' => 'No lifts in Redis'], 503);
+        }
 
-            // ---------- NEW: If any lift already has this floor queued, return that lift ----------
-            // Use a row lock to make this check atomic with any concurrent assigners.
-            // Note: requires next_stops to be a JSON column (or DB supports whereJsonContains).
-            $existing = Lift::whereJsonContains('next_stops', [
-                'floor' => $requestedFloor,
-                'direction' => strtoupper($direction)
-            ])->lockForUpdate()->first();
+        $lifts = [];
+        foreach ($liftKeys as $key) {
+            $data = Redis::hgetall($key);
+            $data = [
+                'liftId'        => $data['liftId'] ?? str_replace("lift:", "", $key),
+                'current_floor' => isset($data['current_floor']) ? (int)$data['current_floor'] : null,
+                'direction'     => $data['direction'] ?? 'IDLE',
+                'status'        => $data['status'] ?? 'idle',
+                'next_stops'    => !empty($data['next_stops'])
+                    ? json_decode($data['next_stops'], true)
+                    : [],
+            ];
 
-            if ($existing) {
-                // If a lift is already queued to stop at this floor, return it immediately.
-                return response()->json([
-                    'liftId' => $existing->id
-                ]);
+            $lifts[] = $data;
+        }
+
+        // ------------------ CHECK: Already queued on any lift ------------------
+        foreach ($lifts as $lift) {
+            foreach ($lift['next_stops'] as $stop) {
+                if (
+                    $stop['floor'] == $requestedFloor &&
+                    strtoupper($stop['direction']) == $direction
+                ) {
+                    return response()->json(['liftId' => $lift['liftId']]);
+                }
             }
-            // --------------------------------------------------------------------------------------
+        }
 
-            // Fetch and lock all lifts for selection (same as before)
-            $lifts = Lift::lockForUpdate()->get();
+        // ------------------ SORT LIFTS INTO GROUPS ------------------
+        $up = [];
+        $down = [];
+        $idle = [];
 
-            if ($lifts->isEmpty()) {
-                return response()->json(['error' => 'No lifts available'], 503);
+        foreach ($lifts as $lift) {
+            $ld = strtoupper(trim($lift['direction']));
+            if ($ld === 'UP') $up[] = $lift;
+            elseif ($ld === 'DOWN') $down[] = $lift;
+            else $idle[] = $lift;
+        }
+
+        $chosen = null;
+        $minTime = PHP_INT_MAX;
+
+        // ------------------ PRIORITY 1: Idle lifts ------------------
+        foreach ($idle as $lift) {
+            $cf = (int) $lift['current_floor'];
+            $t = abs($cf - $requestedFloor);
+            if ($t < $minTime) {
+                $minTime = $t;
+                $chosen = $lift;
             }
+        }
 
-            $up = [];
-            $down = [];
-            $idle = [];
+        // ------------------ PRIORITY 2: Same direction ------------------
+        $sameDir = $direction === 'UP' ? $up : $down;
 
-            foreach ($lifts as $lift) {
-                $liftDirection = strtoupper(trim($lift->direction));
+        foreach ($sameDir as $lift) {
+            $cf = (int) $lift["current_floor"];
+            $stops = $lift['next_stops'];
 
-                if ($liftDirection === 'UP') {
-                    $up[] = $lift;
-                } elseif ($liftDirection === 'DOWN') {
-                    $down[] = $lift;
+            if ($direction === 'UP') {
+                if ($cf <= $requestedFloor) {
+                    $t = $this->calculateTimeWithStops($cf, $requestedFloor, $stops, 'UP', $lift['direction']);
                 } else {
-                    $idle[] = $lift;
+                    $highest = !empty($stops) ? max(array_column($stops, "floor")) : $cf;
+                    $t = ($highest - $cf) + ($highest - $requestedFloor);
                 }
-            }
-
-            $minTime = PHP_INT_MAX;
-            $chosen = null;
-
-            $MAX_FLOOR = FloorHelper::maxNumber(); // 17
-
-            /* IDLE LIFTS - Highest Priority */
-            foreach ($idle as $lift) {
-                $cf = $lift->current_floor;
-                $t = abs($cf - $requestedFloor);
-
-                if ($t < $minTime) {
-                    $minTime = $t;
-                    $chosen = $lift;
-                }
-            }
-
-            /* SAME DIRECTION - Second Priority */
-            $sameDir = $direction === 'UP' ? $up : $down;
-
-            foreach ($sameDir as $lift) {
-                $cf = $lift->current_floor;
-                $stops = $lift->next_stops ?? [];
-
-                if ($direction === 'UP') {
-                    // Only consider if lift hasn't passed requested floor
-                    if ($cf <= $requestedFloor) {
-                        // Calculate time considering existing stops
-                        $t = $this->calculateTimeWithStops($cf, $requestedFloor, $stops, 'UP', $lift->direction);
-                    } else {
-                        // Lift passed this floor, must complete round trip
-                        $highestStop = !empty($stops) ? max($stops) : $cf;
-                        $t = ($highestStop - $cf) + ($highestStop - $requestedFloor);
-                    }
+            } else {
+                if ($cf >= $requestedFloor) {
+                    $t = $this->calculateTimeWithStops($cf, $requestedFloor, $stops, 'DOWN', $lift['direction']);
                 } else {
-                    // Direction is DOWN
-                    if ($cf >= $requestedFloor) {
-                        $t = $this->calculateTimeWithStops($cf, $requestedFloor, $stops, 'DOWN', $lift->direction);
-                    } else {
-                        // Lift passed this floor, must complete round trip
-                        $lowestStop = !empty($stops) ? min($stops) : $cf;
-                        $t = ($cf - $lowestStop) + ($requestedFloor - $lowestStop);
-                    }
-                }
-
-                if (isset($t) && $t < $minTime) {
-                    $minTime = $t;
-                    $chosen = $lift;
+                    $lowest = !empty($stops) ? min(array_column($stops, "floor")) : $cf;
+                    $t = ($cf - $lowest) + ($requestedFloor - $lowest);
                 }
             }
 
-            /* OPPOSITE DIRECTION - Last Resort */
-            $opposite = $direction === 'UP' ? $down : $up;
+            if ($t < $minTime) {
+                $minTime = $t;
+                $chosen = $lift;
+            }
+        }
 
-            foreach ($opposite as $lift) {
+        // ------------------ PRIORITY 3: Opposite direction ------------------
+        $opposite = $direction === 'UP' ? $down : $up;
 
-                $cf = $lift->current_floor;
-                $stops = $lift->next_stops ?? [];
+        foreach ($opposite as $lift) {
+            $cf = (int) $lift['current_floor'];
+            $stops = $lift['next_stops'];
 
-                // PHASE 1: finish current direction
-                if ($lift->direction === 'UP') {
-                    $highest = !empty($stops)
-                        ? max(array_column($stops, "floor"))
-                        : $MAX_FLOOR;
-
-                    $finishTime = $highest - $cf;
-                    $finishPoint = $highest;
-                } else {
-                    $lowest = !empty($stops)
-                        ? min(array_column($stops, "floor"))
-                        : FloorHelper::minNumber();
-
-                    $finishTime = $cf - $lowest;
-                    $finishPoint = $lowest;
-                }
-
-                // PHASE 2: travel from finish point to user
-                $travelToUser = abs($finishPoint - $requestedFloor);
-
-                // PHASE 3: direction correction penalty
-                $directionPenalty = 2; // or 1 or dynamic later
-
-                $t = $finishTime + $travelToUser + $directionPenalty;
-
-                if ($t < $minTime) {
-                    $minTime = $t;
-                    $chosen = $lift;
-                }
+            if ($lift['direction'] === 'UP') {
+                $highest = !empty($stops)
+                    ? max(array_column($stops, "floor"))
+                    : FloorHelper::maxNumber();
+                $finishTime = $highest - $cf;
+                $finishPoint = $highest;
+            } else {
+                $lowest = !empty($stops)
+                    ? min(array_column($stops, "floor"))
+                    : FloorHelper::minNumber();
+                $finishTime = $cf - $lowest;
+                $finishPoint = $lowest;
             }
 
-            if (!$chosen) {
-                return response()->json(['error' => 'No suitable lift found'], 503);
+            $travel = abs($finishPoint - $requestedFloor);
+            $penalty = 2;
+
+            $t = $finishTime + $travel + $penalty;
+
+            if ($t < $minTime) {
+                $minTime = $t;
+                $chosen = $lift;
             }
+        }
 
-            // Extract only floor numbers from stops
-            $stops = $chosen->next_stops;
-            $floorList = array_column($stops, "floor");
+        if (!$chosen) {
+            return response()->json(['error' => 'No suitable lift found'], 503);
+        }
 
-            // Add requested floor if not already there and not current floor
-            if ($chosen->current_floor !== $requestedFloor) {
-                if (!in_array($requestedFloor, $floorList)) {
-                    $stops[] = [
-                        "floor" => $requestedFloor,
-                        "direction" => $direction
-                    ];
-                }
-            }
+        // ------------------ UPDATE THE CHOSEN LIFT IN REDIS ------------------
+        $liftKey = "lift:" . $chosen['liftId'];
 
-            // Set direction if idle
-            if (strtoupper(trim($chosen->direction)) === 'IDLE' && !empty($stops)) {
-                $chosen->direction = $requestedFloor > $chosen->current_floor ? 'UP' : 'DOWN';
-            }
+        $currentFloor     = (int)$chosen['current_floor'];
+        $currentDirection = strtoupper($chosen['direction']);
+        $stops            = $chosen['next_stops'];
 
-            // Sort stops based on current direction
-            if (!empty($stops)) {
-                $stops = StopSorter::sortStops($stops, $chosen->current_floor, $chosen->direction);
-            }
+        // Extract floor numbers
+        $floorList = array_column($stops, "floor");
 
-            $chosen->next_stops = $stops;
-            $chosen->save();
+        // Add new stop if needed
+        if ($currentFloor !== $requestedFloor && !in_array($requestedFloor, $floorList)) {
+            $stops[] = [
+                "floor" => $requestedFloor,
+                "direction" => $direction
+            ];
+        }
 
-            /* RETURN TO UI WITH STRING FLOOR */
-            return response()->json([
-                'liftId' => $chosen->id
-            ]);
-        });
+        // If lift was idle, assign a direction
+        if ($currentDirection === 'IDLE' && !empty($stops)) {
+            $currentDirection = $requestedFloor > $currentFloor ? 'UP' : 'DOWN';
+            $this->saveLiftToDB($chosen['liftId']);
+        }
+
+        // Sort stops based on movement
+        $sortedStops = StopSorter::sortStops(
+            $stops,
+            $currentFloor,
+            $currentDirection
+        );
+
+        // Save updated values to Redis
+        Redis::hset($liftKey, 'direction', $currentDirection);
+        Redis::hset($liftKey, 'next_stops', json_encode($sortedStops));
+        Redis::hset($liftKey, 'updated_at', now()->toDateTimeString());
+
+        return response()->json(['liftId' => $chosen['liftId']]);
     }
 
-    private function calculateTimeWithStops(int $currentFloor, int $targetFloor, array $stops, string $requestedDirection, string $liftDirection = 'IDLE'): int
+
+    public function calculateTimeWithStops(int $currentFloor, int $targetFloor, array $stops, string $requestedDirection, string $liftDirection = 'IDLE'): int
     {
         $requestedDirection = strtoupper($requestedDirection);
         $liftDirection = strtoupper($liftDirection);
@@ -233,56 +227,58 @@ class LiftCaller
 
         return $t;
     }
-
-    /**
-     * Sort stops based on current floor and direction
-     * UP: serve all floors above first (ascending), then floors below (descending)
-     * DOWN: serve all floors below first (descending), then floors above (ascending)
-     */
-    public function sortStops(array $stops, int $currentFloor, string $direction): array
+    public static function saveLiftToDB($liftId)
     {
-        $direction = strtoupper(trim($direction));
+        $liftKey = "lift:$liftId";  // lift:l1
+        $data = Redis::hgetall($liftKey);
 
-        // Optional: remove duplicate floors
-        $stops = array_values(array_reduce($stops, function ($carry, $item) {
-            if (!in_array($item["floor"], array_column($carry, "floor"))) {
-                $carry[] = $item;
-            }
-            return $carry;
-        }, []));
-
-        if (empty($stops)) {
-            return [];
+        $model = Lift::where('lift_id', $liftId)->first();
+        if ($model && !empty($data)) {
+            $model->current_floor = $data['current_floor'];
+            // $model->direction = $data['direction'];
+            // $model->next_stops = $data['next_stops'];
+            // $model->status = $data['status'];
+            // $model->updated_at = now()->toDateTimeString();
+            $model->save();
         }
+    }
 
-        $upStops = array_filter($stops, fn($f) => $f["floor"] > $currentFloor);
-        $downStops = array_filter($stops, fn($f) => $f["floor"] < $currentFloor);
 
-        usort($upStops, function ($a, $b) {
-            return $a['floor'] <=> $b['floor'];   // ascending
-        });      // ascending
-        usort($downStops, function ($a, $b) {
-            return $b['floor'] <=> $a['floor'];   // descending
-        });
+    public static function redisToDB()
+    {
+        $keys = Redis::keys("lift:");  // safer than Redis::keys("")
+        $idleLifts = [];
 
-        // If IDLE, determine direction from closest stop
-        if ($direction === 'IDLE') {
-            if (!empty($upStops) && !empty($downStops)) {
-                // Choose direction based on closest stop
-                $closestUp = $upStops[0][["floor"]] - $currentFloor;
-                $closestDown = $currentFloor - $downStops[0]["floor"];
-                $direction = $closestUp <= $closestDown ? 'UP' : 'DOWN';
-            } elseif (!empty($upStops)) {
-                $direction = 'UP';
-            } elseif (!empty($downStops)) {
-                $direction = 'DOWN';
+        foreach ($keys as $liftKey) {
+
+            $lift = Redis::hGetAll($liftKey);
+
+            if (empty($lift)) {
+                continue;
+            }
+
+            // Check if lift is idle
+            if (isset($lift["direction"]) && $lift["direction"] === "IDLE") {
+                $idleLifts[] = $lift;
             }
         }
 
-        if ($direction === 'UP') {
-            return array_values(array_merge($upStops, $downStops));
-        } else {
-            return array_values(array_merge($downStops, $upStops));
+        // If all 4 lifts idle → sync to DB
+        if (count($idleLifts) === 4) {
+
+            foreach ($idleLifts as $cachedLift) {
+
+                $liftModel = Lift::where('lift_id', $cachedLift['lift_id'])->first();
+
+                if (!$liftModel) continue;
+
+                $liftModel->current_floor = $cachedLift['current_floor'];
+                $liftModel->direction     = $cachedLift['direction'];
+                $liftModel->next_stops    = json_decode($cachedLift['next_stops'], true) ?? [];
+                $liftModel->status        = $cachedLift['status'];
+
+                $liftModel->save();
+            }
         }
     }
 }

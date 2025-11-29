@@ -11,7 +11,7 @@ class LoadLiftsToRedis extends Command
     protected $signature = 'lifts:sync-to-redis';
     protected $description = 'Load all lifts from MySQL into Redis';
 
-    public function handle()
+    public static function handle()
     {
         $lifts = Lift::all();
 
@@ -29,6 +29,6 @@ class LoadLiftsToRedis extends Command
             ]);
         }
 
-        $this->info("Lifts synced to Redis successfully.");
+        info("Lifts synced to Redis successfully.");
     }
 }

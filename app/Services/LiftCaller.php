@@ -244,41 +244,41 @@ class LiftCaller
     }
 
 
-    public static function redisToDB()
-    {
-        $keys = Redis::keys("lift:");  // safer than Redis::keys("")
-        $idleLifts = [];
+    // public static function redisToDB()
+    // {
+    //     $keys = Redis::keys("lift:");  // safer than Redis::keys("")
+    //     $idleLifts = [];
 
-        foreach ($keys as $liftKey) {
+    //     foreach ($keys as $liftKey) {
 
-            $lift = Redis::hGetAll($liftKey);
+    //         $lift = Redis::hGetAll($liftKey);
 
-            if (empty($lift)) {
-                continue;
-            }
+    //         if (empty($lift)) {
+    //             continue;
+    //         }
 
-            // Check if lift is idle
-            if (isset($lift["direction"]) && $lift["direction"] === "IDLE") {
-                $idleLifts[] = $lift;
-            }
-        }
+    //         // Check if lift is idle
+    //         if (isset($lift["direction"]) && $lift["direction"] === "IDLE") {
+    //             $idleLifts[] = $lift;
+    //         }
+    //     }
 
-        // If all 4 lifts idle → sync to DB
-        if (count($idleLifts) === 4) {
+    //     // If all 4 lifts idle → sync to DB
+    //     if (count($idleLifts) === 4) {
 
-            foreach ($idleLifts as $cachedLift) {
+    //         foreach ($idleLifts as $cachedLift) {
 
-                $liftModel = Lift::where('lift_id', $cachedLift['lift_id'])->first();
+    //             $liftModel = Lift::where('lift_id', $cachedLift['lift_id'])->first();
 
-                if (!$liftModel) continue;
+    //             if (!$liftModel) continue;
 
-                $liftModel->current_floor = $cachedLift['current_floor'];
-                $liftModel->direction     = $cachedLift['direction'];
-                $liftModel->next_stops    = json_decode($cachedLift['next_stops'], true) ?? [];
-                $liftModel->status        = $cachedLift['status'];
+    //             $liftModel->current_floor = $cachedLift['current_floor'];
+    //             $liftModel->direction     = $cachedLift['direction'];
+    //             $liftModel->next_stops    = json_decode($cachedLift['next_stops'], true) ?? [];
+    //             $liftModel->status        = $cachedLift['status'];
 
-                $liftModel->save();
-            }
-        }
-    }
+    //             $liftModel->save();
+    //         }
+    //     }
+    // }
 }

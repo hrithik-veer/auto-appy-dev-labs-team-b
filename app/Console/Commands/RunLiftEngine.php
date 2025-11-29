@@ -5,9 +5,11 @@ namespace App\Console\Commands;
 $LIFT_OPENING_TIME = config('constants.LIFT_OPENING_TIME');
 $LIFT_TRAVELLING_TIME = config('constants.LIFT_TRAVELLING_TIME');
 
+use App\Console\Commands\LoadLiftsToRedis as CommandsLoadLiftsToRedis;
 use Illuminate\Support\Facades\Redis;
 use App\Services\LiftCaller;
 use Illuminate\Console\Command;
+use App\Console\Commands\LoadLiftsToRedis;
 use App\Models\Lift;
 
 class RunLiftEngine extends Command
@@ -18,6 +20,10 @@ class RunLiftEngine extends Command
     public function handle()
     {
         $this->info("Lift engine started...");
+
+        if (Redis::keys("lift:*") === []) {
+            LoadLiftsToRedis::handle();
+        }
 
         while (true) {
 
